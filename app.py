@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 from supabase import Client, create_client
 
@@ -12,6 +13,11 @@ st.set_page_config(page_title="16-Week Weight Gain Tracker", layout="wide")
 PLAN_LENGTH_WEEKS = 16
 BASELINE_WEIGHT_KG = 73.0
 MEAL_TAGS = ["breakfast", "lunch", "snack", "dinner", "other"]
+LOCKED_CHART_CONFIG = {
+    "scrollZoom": False,
+    "displayModeBar": False,
+    "doubleClick": False,
+}
 
 CALORIE_PLAN = {
     1: 2560,
@@ -207,12 +213,20 @@ def get_daily_calories(cal_df: pd.DataFrame) -> pd.DataFrame:
             }
         )
 
-    grouped = (
-        cal_df.groupby(cal_df["date"].dt.date, as_index=False)["calories"].sum().rename(
-            columns={"date": "date", "calories": "daily_calories"}
+    daily_df = cal_df.dropna(subset=["date", "calories"]).copy()
+    if daily_df.empty:
+        return pd.DataFrame(
+            {
+                "date": pd.Series(dtype="datetime64[ns]"),
+                "daily_calories": pd.Series(dtype="float64"),
+            }
         )
+
+    daily_df["date"] = daily_df["date"].dt.normalize()
+    grouped = (
+        daily_df.groupby("date", as_index=False)
+        .agg(daily_calories=("calories", "sum"))
     )
-    grouped["date"] = pd.to_datetime(grouped["date"])
     return grouped.sort_values("date").reset_index(drop=True)
 
 
@@ -305,6 +319,61 @@ def prepare_calorie_chart_df(daily_cal_df: pd.DataFrame, plan_start: date) -> pd
     return chart_df
 
 
+def get_chart_y_range(series_list: list[pd.Series], min_padding: float) -> list[float] | None:
+    values = pd.concat(series_list).dropna()
+    if values.empty:
+        return None
+
+    y_min = float(values.min())
+    y_max = float(values.max())
+    spread = y_max - y_min
+    padding = max(spread * 0.12, min_padding)
+    return [y_min - padding, y_max + padding]
+
+
+def render_locked_line_chart(
+    chart_df: pd.DataFrame,
+    title: str,
+    series: dict[str, str],
+    y_title: str,
+    min_y_padding: float,
+) -> None:
+    fig = go.Figure()
+    for column, label in series.items():
+        clean_df = chart_df.dropna(subset=["date", column])
+        if clean_df.empty:
+            continue
+
+        fig.add_trace(
+            go.Scatter(
+                x=clean_df["date"],
+                y=clean_df[column],
+                mode="lines+markers",
+                name=label,
+                hovertemplate="%{x|%d %b %Y}<br>%{y:.1f}<extra></extra>",
+            )
+        )
+
+    if not fig.data:
+        st.write(f"Not enough data yet for {title.lower()}.")
+        return
+
+    y_range = get_chart_y_range(
+        [chart_df[column] for column in series if column in chart_df.columns],
+        min_y_padding,
+    )
+    fig.update_layout(
+        height=340,
+        margin=dict(l=8, r=8, t=12, b=8),
+        hovermode="x unified",
+        dragmode=False,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        xaxis=dict(fixedrange=True, title=None),
+        yaxis=dict(fixedrange=True, title=y_title, rangemode="normal", range=y_range),
+    )
+    st.plotly_chart(fig, use_container_width=True, config=LOCKED_CHART_CONFIG)
+
+
 def main() -> None:
     apply_responsive_styles()
 
@@ -382,16 +451,37 @@ def main() -> None:
             st.write("No bodyweight data yet. Add entries in the Bodyweight Entry tab.")
         else:
             st.markdown("#### Daily Bodyweight")
-            st.line_chart(weight_chart_df.set_index("date")["weight_kg"])
+            render_locked_line_chart(
+                weight_chart_df,
+                "Daily Bodyweight",
+                {"weight_kg": "Daily bodyweight"},
+                "kg",
+                0.4,
+            )
 
             st.markdown("#### 7-Day Rolling Average Bodyweight")
-            st.line_chart(weight_chart_df.set_index("date")["weight_7d_avg"])
+            render_locked_line_chart(
+                weight_chart_df,
+                "7-Day Rolling Average Bodyweight",
+                {"weight_7d_avg": "7-day average"},
+                "kg",
+                0.3,
+            )
 
         if cal_chart_df.empty:
             st.write("No calorie data yet. Add entries in the Calorie Entry tab.")
         else:
             st.markdown("#### Daily Calories (Summed) vs Target")
-            st.line_chart(cal_chart_df.set_index("date")[["daily_calories", "target_calories"]])
+            render_locked_line_chart(
+                cal_chart_df,
+                "Daily Calories",
+                {
+                    "daily_calories": "Daily calories",
+                    "target_calories": "Target calories",
+                },
+                "kcal",
+                150,
+            )
 
     with tab_data:
         st.subheader("Data")
