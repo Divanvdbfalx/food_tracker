@@ -1,4 +1,13 @@
-streamlit>=1.36.0
-pandas>=2.2.0
-plotly>=5.22.0
-supabase>=2.7.4
+# No Python dependencies are required for this project.
+#
+# Vercel deployment requirements are managed via package.json:
+# - next@14.2.5
+# - react@18.3.1
+# - react-dom@18.3.1
+# - @supabase/supabase-js@^2.49.8
+# - chart.js@^4.5.1
+# - react-chartjs-2@^5.3.1
+# - recharts@^2.12.7
+#
+# Runtime requirements for Vercel:
+# - Node.js 18+ (recommended: 20.x)

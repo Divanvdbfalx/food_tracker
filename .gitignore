@@ -1,1 +1,5 @@
-.streamlit/secrets.toml
+.next/
+node_modules/
+.env
+__pycache__/
+*.pyc
