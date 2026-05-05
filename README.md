@@ -1,6 +1,6 @@
 # Weight Gain Tracker (Supabase)
 
-A Streamlit app for tracking bodyweight and calorie intake across a 16-week weight-gain plan, backed by Supabase.
+Next.js app for tracking bodyweight and calorie intake with Supabase.
 
 ## Features
 
@@ -14,8 +14,16 @@ A Streamlit app for tracking bodyweight and calorie intake across a 16-week weig
 ## Setup
 
 ```bash
-pip install -r requirements.txt
+npm install
+cp .env.local.example .env.local
+npm run dev
 ```
+
+Set values in `.env.local`:
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+
+For Vercel, add the same env vars in Project Settings -> Environment Variables.
 
 ## Supabase Setup
 
@@ -40,28 +48,6 @@ create table if not exists public.calorie_log (
 );
 ```
 
-3. In Supabase Project Settings -> API, copy:
-- Project URL
-- `anon` public key
-
-4. Add Streamlit secrets.
-
-Local (`.streamlit/secrets.toml`):
-
-```toml
-SUPABASE_URL = "https://YOUR_PROJECT_REF.supabase.co"
-SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY"
-```
-
-For Streamlit Community Cloud, add the same keys in App Settings -> Secrets.
-
-## Run
-
-```bash
-streamlit run app.py
-```
-
 ## Notes
 
-- The app requires `SUPABASE_URL` and `SUPABASE_KEY` to start.
 - For production, add Row Level Security and policies once auth is introduced.
