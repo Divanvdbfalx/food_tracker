@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Line } from "react-chartjs-2";
-import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend } from "chart.js";
+import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler } from "chart.js";
 import { supabase } from "@/lib/supabase";
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend);
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler);
 
 const MEAL_TAGS = ["breakfast", "lunch", "snack", "dinner", "other"];
 const DEFAULT_CALORIE_PLAN = {1:2560,2:2623,3:2686,4:2749,5:2811,6:2874,7:2937,8:3000,9:3000,10:3000,11:3000,12:3000,13:3000,14:3000,15:3000,16:3000};
@@ -34,14 +34,14 @@ export default function Page() {
   const [caloriePlan, setCaloriePlan] = useState(DEFAULT_CALORIE_PLAN);
 
   const [weightForm, setWeightForm] = useState({ date: todayISO(), weight_kg: "73.0", notes: "" });
-  const [calForm, setCalForm] = useState({ date: todayISO(), time: timeNow(), meal_tag: "breakfast", calories: "400", notes: "" });
+  const [calForm, setCalForm] = useState({ date: todayISO(), time: timeNow(), meal_tag: "breakfast", calories: "400", protein_g: "30", notes: "" });
   const [activeForm, setActiveForm] = useState({ date: todayISO(), time: timeNow(), calories: "350", notes: "" });
 
   async function loadData() {
     if (!supabase) return setMsg("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
     const [w, c, a, t] = await Promise.all([
       supabase.from("bodyweight_log").select("date,weight_kg,notes").order("date"),
-      supabase.from("calorie_log").select("date,time,meal_tag,calories,notes").order("date").order("time"),
+      supabase.from("calorie_log").select("date,time,meal_tag,calories,protein_g,notes").order("date").order("time"),
       supabase.from("active_calorie_log").select("date,time,calories,notes").order("date").order("time"),
       supabase.from("weekly_calorie_targets").select("week_number,target_calories").order("week_number"),
     ]);
@@ -79,9 +79,9 @@ export default function Page() {
     setCalMsg("");
     if (!supabase) return setCalMsg("Supabase env vars are missing.");
     if (!calForm.date || !calForm.calories) return setCalMsg("Please enter date and calories.");
-    const { error } = await supabase.from("calorie_log").insert({ ...calForm, calories: Number(calForm.calories) });
+    const { error } = await supabase.from("calorie_log").insert({ ...calForm, calories: Number(calForm.calories), protein_g: Number(calForm.protein_g || 0) });
     if (error) return setCalMsg(error.message);
-    setCalForm({ date: todayISO(), time: timeNow(), meal_tag: "breakfast", calories: "400", notes: "" });
+    setCalForm({ date: todayISO(), time: timeNow(), meal_tag: "breakfast", calories: "400", protein_g: "30", notes: "" });
     setCalMsg("Calorie entry saved.");
     loadData();
   }
@@ -122,6 +122,7 @@ export default function Page() {
             <Metric l="Today&apos;s Target" v={`${model.todayTarget} kcal`} />
             <Metric l="Today&apos;s Calories" v={num(model.todayCalories, "kcal")} />
             <Metric l="Calories Left" v={num(model.caloriesLeft, "kcal")} />
+            <Metric l="Today&apos;s Protein" v={num(model.todayProtein, "g")} />
             <Metric l="Active Calories" v={num(model.todayActiveCalories, "kcal")} />
             <Metric l="Latest Weight" v={num(model.latestWeight, "kg")} />
             <Metric l="7-Day Avg Weight" v={num(model.avg7, "kg")} />
@@ -164,6 +165,7 @@ export default function Page() {
               <input type="time" value={calForm.time} onChange={(e) => setCalForm({ ...calForm, time: e.target.value })} />
               <select value={calForm.meal_tag} onChange={(e) => setCalForm({ ...calForm, meal_tag: e.target.value })}>{MEAL_TAGS.map((m) => <option key={m}>{m}</option>)}</select>
               <input type="number" min="1" max="5000" step="1" placeholder="Calories" value={calForm.calories} onChange={(e) => setCalForm({ ...calForm, calories: e.target.value })} />
+              <input type="number" min="0" max="500" step="1" placeholder="Protein (g)" value={calForm.protein_g} onChange={(e) => setCalForm({ ...calForm, protein_g: e.target.value })} />
               <textarea placeholder="Notes" value={calForm.notes} onChange={(e) => setCalForm({ ...calForm, notes: e.target.value })} />
               <div />
             </div>
@@ -197,7 +199,7 @@ export default function Page() {
           <h4>Bodyweight Log</h4>
           <Table rows={[...weight].sort((a, b) => b.date.localeCompare(a.date))} cols={["date", "weight_kg", "notes"]} />
           <h4>Calorie Log</h4>
-          <Table rows={[...calories].sort((a, b) => `${b.date}${b.time}`.localeCompare(`${a.date}${a.time}`))} cols={["date", "time", "meal_tag", "calories", "notes"]} />
+          <Table rows={[...calories].sort((a, b) => `${b.date}${b.time}`.localeCompare(`${a.date}${a.time}`))} cols={["date", "time", "meal_tag", "calories", "protein_g", "notes"]} />
           <h4>Active Calorie Log</h4>
           <Table rows={[...activeCalories].sort((a, b) => `${b.date}${b.time}`.localeCompare(`${a.date}${a.time}`))} cols={["date", "time", "calories", "notes"]} />
           <div className="sp" />
@@ -239,26 +241,105 @@ function WeightChart({ data }) {
 }
 
 function CalorieChart({ data }) {
+  const [showCalories, setShowCalories] = useState(true);
+  const [showProtein, setShowProtein] = useState(true);
+
   if (!data.length) return <p className="muted">No data yet.</p>;
   const labels = data.map((d) => d.date);
   const daily = data.map((d) => (d.daily_calories == null ? null : r2(d.daily_calories)));
   const target = data.map((d) => (d.target_calories == null ? null : r2(d.target_calories)));
-  const vals = [...daily, ...target].filter((v) => v != null);
-  const min = Math.min(...vals);
-  const max = Math.max(...vals);
+  const protein = data.map((d) => (d.daily_protein == null ? null : r2(d.daily_protein)));
+
+  const calVals = [...daily, ...target].filter((v) => v != null);
+  const calMin = calVals.length ? Math.max(0, Math.min(...calVals) - 150) : 0;
+  const calMax = calVals.length ? Math.max(...calVals) + 150 : 3500;
+
+  const proteinVals = protein.filter((v) => v != null);
+  const pMin = proteinVals.length ? Math.max(0, Math.min(...proteinVals, 130) - 20) : 0;
+  const pMax = proteinVals.length ? Math.max(...proteinVals, 160) + 20 : 220;
+
+  const proteinLowerBand = labels.map(() => 130);
+  const proteinUpperBand = labels.map(() => 160);
+
   return (
-    <div style={{ height: 300 }}>
-      <Line
-        data={{
-          labels,
-          datasets: [
-            { label: "Daily calories", data: daily, borderColor: "#2f9a47", backgroundColor: "transparent", pointRadius: 2.5, tension: 0.25 },
-            { label: "Target", data: target, borderColor: "#b25f1b", backgroundColor: "transparent", pointRadius: 2.5, borderDash: [6, 4], tension: 0 },
-          ],
-        }}
-        options={baseChartOptions({ min: Math.max(0, min - 150), max: max + 150, comma: true })}
-      />
-    </div>
+    <>
+      <div className="row" style={{ marginBottom: 8, gap: 16 }}>
+        <button
+          type="button"
+          onClick={() => setShowCalories((v) => !v)}
+          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontWeight: showCalories ? 700 : 400, color: "#2f9a47" }}
+        >
+          Calories
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowProtein((v) => !v)}
+          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontWeight: showProtein ? 700 : 400, color: "#4f46e5" }}
+        >
+          Protein
+        </button>
+      </div>
+      <div style={{ height: 320 }}>
+        <Line
+          data={{
+            labels,
+            datasets: [
+              ...(showCalories ? [
+                { label: "Daily calories", data: daily, yAxisID: "y", borderColor: "#2f9a47", backgroundColor: "transparent", pointRadius: 2.5, tension: 0.25 },
+                { label: "Target", data: target, yAxisID: "y", borderColor: "#b25f1b", backgroundColor: "transparent", pointRadius: 2.5, borderDash: [6, 4], tension: 0 },
+              ] : []),
+              ...(showProtein ? [
+                { label: "Protein lower", data: proteinLowerBand, yAxisID: "yProtein", borderColor: "rgba(79,70,229,0)", backgroundColor: "transparent", pointRadius: 0, tension: 0, fill: false },
+                { label: "Protein target range", data: proteinUpperBand, yAxisID: "yProtein", borderColor: "rgba(79,70,229,0)", backgroundColor: "rgba(79,70,229,0.14)", pointRadius: 0, tension: 0, fill: "-1" },
+                { label: "Daily protein", data: protein, yAxisID: "yProtein", borderColor: "#4f46e5", backgroundColor: "transparent", pointRadius: 2.5, tension: 0.25 },
+              ] : []),
+            ],
+          }}
+          options={{
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            plugins: {
+              legend: {
+                position: "top",
+                align: "center",
+                labels: {
+                  boxWidth: 40,
+                  boxHeight: 12,
+                  color: "#4b5563",
+                  filter: (item) => !["Protein lower", "Protein target range"].includes(item.text),
+                },
+              },
+              tooltip: {
+                enabled: true,
+                callbacks: {
+                  label: (ctx) => `${ctx.dataset.label}: ${pretty(ctx.parsed.y, false)}${ctx.dataset.yAxisID === "yProtein" ? " g" : " kcal"}`,
+                },
+              },
+            },
+            scales: {
+              x: { grid: { color: "rgba(120,120,120,0.15)" }, ticks: { color: "#4b5563", maxRotation: 0, autoSkip: true } },
+              y: {
+                display: showCalories,
+                position: "left",
+                min: calMin,
+                max: calMax,
+                grid: { color: "rgba(120,120,120,0.15)" },
+                ticks: { color: "#4b5563", callback: (v) => pretty(v, true) },
+              },
+              yProtein: {
+                display: showProtein,
+                position: "right",
+                min: pMin,
+                max: pMax,
+                grid: { drawOnChartArea: false },
+                ticks: { color: "#4f46e5", callback: (v) => `${pretty(v, false)}g` },
+              },
+            },
+          }}
+        />
+      </div>
+    </>
   );
 }
 
@@ -333,11 +414,16 @@ function compute(weightRows, calorieRows, activeRows, caloriePlan) {
   const weeklyChange = avg7 != null && prev7 != null ? avg7 - prev7 : null;
 
   const dmap = {};
-  cs.forEach((r) => { dmap[r.date] = (dmap[r.date] || 0) + Number(r.calories || 0); });
-  const daily = Object.entries(dmap).map(([date, daily_calories]) => ({ date, daily_calories })).sort((a, b) => a.date.localeCompare(b.date));
+  const pmap = {};
+  cs.forEach((r) => {
+    dmap[r.date] = (dmap[r.date] || 0) + Number(r.calories || 0);
+    pmap[r.date] = (pmap[r.date] || 0) + Number(r.protein_g || 0);
+  });
+  const daily = Object.keys(dmap).map((date) => ({ date, daily_calories: dmap[date], daily_protein: pmap[date] || 0 })).sort((a, b) => a.date.localeCompare(b.date));
   const amap = {};
   as.forEach((r) => { amap[r.date] = (amap[r.date] || 0) + Number(r.calories || 0); });
   const todayCalories = dmap[todayISO()] ?? 0;
+  const todayProtein = pmap[todayISO()] ?? 0;
   const todayActiveCalories = amap[todayISO()] ?? 0;
   const todayTarget = baseTarget + todayActiveCalories;
   const caloriesLeft = todayTarget - todayCalories;
@@ -366,7 +452,7 @@ function compute(weightRows, calorieRows, activeRows, caloriePlan) {
     };
   });
 
-  return { currentWeek: week, todayTarget, todayCalories, todayActiveCalories, caloriesLeft, latestWeight, avg7, prev7, weeklyChange, avgCal, diff, guidance, weightChart, calorieChart, weeklyTargetChart };
+  return { currentWeek: week, todayTarget, todayCalories, todayProtein, todayActiveCalories, caloriesLeft, latestWeight, avg7, prev7, weeklyChange, avgCal, diff, guidance, weightChart, calorieChart, weeklyTargetChart };
 }
 
 function getWeek(planStart, dateStr) {

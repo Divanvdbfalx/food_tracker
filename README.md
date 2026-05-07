@@ -44,8 +44,12 @@ create table if not exists public.calorie_log (
   time text not null,
   meal_tag text not null,
   calories integer not null,
+  protein_g integer not null default 0,
   notes text default ''
 );
+
+-- If your table already exists, add the column:
+alter table public.calorie_log add column if not exists protein_g integer not null default 0;
 ```
 
 ## Notes
