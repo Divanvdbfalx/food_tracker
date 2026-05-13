@@ -126,8 +126,7 @@ export default function Page() {
             <Metric l="Active Calories" v={num(model.todayActiveCalories, "kcal")} />
             <Metric l="Latest Weight" v={num(model.latestWeight, "kg")} />
             <Metric l="7-Day Avg Weight" v={num(model.avg7, "kg")} />
-            <Metric l="Avg Daily Calories" v={num(model.avgCal, "kcal")} />
-            <Metric l="Vs Target" v={num(model.diff, "kcal")} />
+            <Metric l="Weekly Weight Change" v={num(model.weeklyChange, "kg/week")} />
           </div>
           <div className="info">{model.guidance}</div>
           <div className="sp" />
@@ -138,8 +137,11 @@ export default function Page() {
           <p className="muted">Daily calories vs target</p>
           <CalorieChart data={model.calorieChart} />
           <div className="sp" />
+          <p className="muted">Daily protein</p>
+          <ProteinChart data={model.calorieChart} />
+          <div className="sp" />
           <p className="muted">Weekly target calories (from first bodyweight entry date)</p>
-          <WeeklyTargetChart data={model.weeklyTargetChart} />
+          <WeeklyTargetChart data={model.weeklyTargetChart} currentWeek={model.currentWeek} />
         </section>
 
         <section className={`panel ${tab === "body" ? "active" : ""}`}>
@@ -241,18 +243,71 @@ function WeightChart({ data }) {
 }
 
 function CalorieChart({ data }) {
-  const [showCalories, setShowCalories] = useState(true);
-  const [showProtein, setShowProtein] = useState(true);
-
   if (!data.length) return <p className="muted">No data yet.</p>;
   const labels = data.map((d) => d.date);
   const daily = data.map((d) => (d.daily_calories == null ? null : r2(d.daily_calories)));
   const target = data.map((d) => (d.target_calories == null ? null : r2(d.target_calories)));
-  const protein = data.map((d) => (d.daily_protein == null ? null : r2(d.daily_protein)));
 
   const calVals = [...daily, ...target].filter((v) => v != null);
   const calMin = calVals.length ? Math.max(0, Math.min(...calVals) - 150) : 0;
   const calMax = calVals.length ? Math.max(...calVals) + 150 : 3500;
+
+  return (
+    <div style={{ height: 320 }}>
+      <Line
+        data={{
+          labels,
+          datasets: [
+            { label: "Target", data: target, borderColor: "#b25f1b", backgroundColor: "transparent", pointRadius: 2.5, borderDash: [6, 4], tension: 0.18 },
+            {
+              label: "Above target area",
+              data: daily.map((v, i) => (v != null && target[i] != null ? Math.max(v, target[i]) : null)),
+              borderColor: "rgba(0,0,0,0)",
+              backgroundColor: "rgba(34,197,94,0.22)",
+              pointRadius: 0,
+              tension: 0.18,
+              spanGaps: true,
+              fill: 0,
+            },
+            {
+              label: "Below target area",
+              data: daily.map((v, i) => (v != null && target[i] != null ? Math.min(v, target[i]) : null)),
+              borderColor: "rgba(0,0,0,0)",
+              backgroundColor: "rgba(239,68,68,0.22)",
+              pointRadius: 0,
+              tension: 0.18,
+              spanGaps: true,
+              fill: 0,
+            },
+            { label: "Daily calories", data: daily, borderColor: "#2f9a47", backgroundColor: "transparent", pointRadius: 2.5, tension: 0.18 },
+          ],
+        }}
+        options={{
+          ...baseChartOptions({ min: calMin, max: calMax, comma: true }),
+          plugins: {
+            ...baseChartOptions({ min: calMin, max: calMax, comma: true }).plugins,
+            legend: {
+              ...baseChartOptions({ min: calMin, max: calMax, comma: true }).plugins.legend,
+              labels: {
+                ...baseChartOptions({ min: calMin, max: calMax, comma: true }).plugins.legend.labels,
+                filter: (item) => !["Above target area", "Below target area"].includes(item.text),
+              },
+            },
+            tooltip: {
+              ...baseChartOptions({ min: calMin, max: calMax, comma: true }).plugins.tooltip,
+              filter: (ctx) => !["Above target area", "Below target area"].includes(ctx.dataset.label),
+            },
+          },
+        }}
+      />
+    </div>
+  );
+}
+
+function ProteinChart({ data }) {
+  if (!data.length) return <p className="muted">No data yet.</p>;
+  const labels = data.map((d) => d.date);
+  const protein = data.map((d) => (d.daily_protein == null ? null : r2(d.daily_protein)));
 
   const proteinVals = protein.filter((v) => v != null);
   const pMin = proteinVals.length ? Math.max(0, Math.min(...proteinVals, 130) - 20) : 0;
@@ -262,92 +317,40 @@ function CalorieChart({ data }) {
   const proteinUpperBand = labels.map(() => 160);
 
   return (
-    <>
-      <div className="row" style={{ marginBottom: 8, gap: 16 }}>
-        <button
-          type="button"
-          onClick={() => setShowCalories((v) => !v)}
-          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontWeight: showCalories ? 700 : 400, color: "#2f9a47" }}
-        >
-          Calories
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowProtein((v) => !v)}
-          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontWeight: showProtein ? 700 : 400, color: "#4f46e5" }}
-        >
-          Protein
-        </button>
-      </div>
-      <div style={{ height: 320 }}>
-        <Line
-          data={{
-            labels,
-            datasets: [
-              ...(showCalories ? [
-                { label: "Daily calories", data: daily, yAxisID: "y", borderColor: "#2f9a47", backgroundColor: "transparent", pointRadius: 2.5, tension: 0.25 },
-                { label: "Target", data: target, yAxisID: "y", borderColor: "#b25f1b", backgroundColor: "transparent", pointRadius: 2.5, borderDash: [6, 4], tension: 0 },
-              ] : []),
-              ...(showProtein ? [
-                { label: "Protein lower", data: proteinLowerBand, yAxisID: "yProtein", borderColor: "rgba(79,70,229,0)", backgroundColor: "transparent", pointRadius: 0, tension: 0, fill: false },
-                { label: "Protein target range", data: proteinUpperBand, yAxisID: "yProtein", borderColor: "rgba(79,70,229,0)", backgroundColor: "rgba(79,70,229,0.14)", pointRadius: 0, tension: 0, fill: "-1" },
-                { label: "Daily protein", data: protein, yAxisID: "yProtein", borderColor: "#4f46e5", backgroundColor: "transparent", pointRadius: 2.5, tension: 0.25 },
-              ] : []),
-            ],
-          }}
-          options={{
-            responsive: true,
-            maintainAspectRatio: false,
-            interaction: { mode: "index", intersect: false },
-            plugins: {
-              legend: {
-                position: "top",
-                align: "center",
-                labels: {
-                  boxWidth: 40,
-                  boxHeight: 12,
-                  color: "#4b5563",
-                  filter: (item) => !["Protein lower", "Protein target range"].includes(item.text),
-                },
-              },
-              tooltip: {
-                enabled: true,
-                callbacks: {
-                  label: (ctx) => `${ctx.dataset.label}: ${pretty(ctx.parsed.y, false)}${ctx.dataset.yAxisID === "yProtein" ? " g" : " kcal"}`,
-                },
+    <div style={{ height: 320 }}>
+      <Line
+        data={{
+          labels,
+          datasets: [
+            { label: "Protein lower", data: proteinLowerBand, borderColor: "rgba(79,70,229,0)", backgroundColor: "transparent", pointRadius: 0, tension: 0, fill: false },
+            { label: "Protein target range", data: proteinUpperBand, borderColor: "rgba(79,70,229,0)", backgroundColor: "rgba(79,70,229,0.14)", pointRadius: 0, tension: 0, fill: "-1" },
+            { label: "Daily protein", data: protein, borderColor: "#4f46e5", backgroundColor: "transparent", pointRadius: 2.5, tension: 0.25 },
+          ],
+        }}
+        options={{
+          ...baseChartOptions({ min: pMin, max: pMax }),
+          plugins: {
+            ...baseChartOptions({ min: pMin, max: pMax }).plugins,
+            legend: {
+              ...baseChartOptions({ min: pMin, max: pMax }).plugins.legend,
+              labels: {
+                ...baseChartOptions({ min: pMin, max: pMax }).plugins.legend.labels,
+                filter: (item) => !["Protein lower", "Protein target range"].includes(item.text),
               },
             },
-            scales: {
-              x: { grid: { color: "rgba(120,120,120,0.15)" }, ticks: { color: "#4b5563", maxRotation: 0, autoSkip: true } },
-              y: {
-                display: showCalories,
-                position: "left",
-                min: calMin,
-                max: calMax,
-                grid: { color: "rgba(120,120,120,0.15)" },
-                ticks: { color: "#4b5563", callback: (v) => pretty(v, true) },
-              },
-              yProtein: {
-                display: showProtein,
-                position: "right",
-                min: pMin,
-                max: pMax,
-                grid: { drawOnChartArea: false },
-                ticks: { color: "#4f46e5", callback: (v) => `${pretty(v, false)}g` },
-              },
-            },
-          }}
-        />
-      </div>
-    </>
+          },
+        }}
+      />
+    </div>
   );
 }
 
-function WeeklyTargetChart({ data }) {
+function WeeklyTargetChart({ data, currentWeek }) {
   if (!data.length) return <p className="muted">No target data yet.</p>;
   const labels = data.map((d) => `W${d.week} (${d.date})`);
   const target = data.map((d) => (d.target_calories == null ? null : r2(d.target_calories)));
-  const vals = target.filter((v) => v != null);
+  const avgWeekCalories = data.map((d) => (d.avg_week_calories == null ? null : r2(d.avg_week_calories)));
+  const vals = [...target, ...avgWeekCalories].filter((v) => v != null);
   const min = Math.min(...vals);
   const max = Math.max(...vals);
   return (
@@ -356,7 +359,8 @@ function WeeklyTargetChart({ data }) {
         data={{
           labels,
           datasets: [
-            { label: "Weekly target", data: target, borderColor: "#b25f1b", backgroundColor: "transparent", pointRadius: 2.5, tension: 0.2 },
+            { label: "Weekly target", data: target, borderColor: "#b25f1b", backgroundColor: "transparent", pointRadius: (ctx) => (data[ctx.dataIndex]?.week === currentWeek ? 6 : 2.5), pointHoverRadius: (ctx) => (data[ctx.dataIndex]?.week === currentWeek ? 7 : 4), tension: 0.2 },
+            { label: "Avg daily calories (week)", data: avgWeekCalories, borderColor: "#2f9a47", backgroundColor: "transparent", pointRadius: 2.5, borderDash: [5, 4], tension: 0.2 },
           ],
         }}
         options={baseChartOptions({ min: Math.max(0, min - 150), max: max + 150, comma: true })}
@@ -441,14 +445,26 @@ function compute(weightRows, calorieRows, activeRows, caloriePlan) {
 
   const weightChart = ws.map((w, i) => ({ ...w, weight_7d_avg: i >= 6 ? avg(vals.slice(i - 6, i + 1)) : null }));
   const calorieChart = daily.map((d) => ({ ...d, target_calories: (caloriePlan[getWeek(planStart, d.date)] ?? DEFAULT_CALORIE_PLAN[getWeek(planStart, d.date)]) + (amap[d.date] ?? 0) }));
+  const weeklyCalsByWeek = {};
+  const today = todayISO();
+  daily.forEach((d) => {
+    // Exclude today from weekly averages because the day may still be in progress.
+    if (d.date === today) return;
+    const w = getWeek(planStart, d.date);
+    if (!weeklyCalsByWeek[w]) weeklyCalsByWeek[w] = [];
+    weeklyCalsByWeek[w].push(d.daily_calories);
+  });
+
   const weeklyTargetChart = Array.from({ length: 16 }, (_, i) => {
     const weekNum = i + 1;
     const d = new Date(planStart);
     d.setDate(d.getDate() + i * 7);
+    const weekVals = weeklyCalsByWeek[weekNum] || [];
     return {
       week: weekNum,
       date: d.toISOString().slice(0, 10),
       target_calories: caloriePlan[weekNum] ?? DEFAULT_CALORIE_PLAN[weekNum],
+      avg_week_calories: weekVals.length ? avg(weekVals) : null,
     };
   });
 
