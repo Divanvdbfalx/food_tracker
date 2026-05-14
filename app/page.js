@@ -233,7 +233,20 @@ function WeightChart({ data }) {
           labels,
           datasets: [
             { label: "Daily weight", data: daily, borderColor: "#c26d10", backgroundColor: "transparent", pointRadius: 2.5, tension: 0.25 },
-            { label: "7-day avg", data: avg7, borderColor: "#6d321d", backgroundColor: "transparent", pointRadius: 2.5, tension: 0.25 },
+            {
+              label: "7-day avg",
+              data: avg7,
+              borderColor: "#6d321d",
+              backgroundColor: "transparent",
+              pointRadius: 2.5,
+              tension: 0.25,
+              segment: {
+                borderDash: (ctx) => {
+                  const lastSevenStartIndex = Math.max(6, data.length - 7);
+                  return ctx.p0DataIndex >= lastSevenStartIndex && ctx.p1DataIndex >= lastSevenStartIndex ? [] : [6, 4];
+                },
+              },
+            },
           ],
         }}
         options={baseChartOptions({ min: min - 0.1, max: max + 0.1 })}
@@ -384,7 +397,7 @@ function baseChartOptions({ min, max, comma = false }) {
       },
     },
     scales: {
-      x: { grid: { color: "rgba(120,120,120,0.15)" }, ticks: { color: "#4b5563", maxRotation: 0, autoSkip: true } },
+      x: { grid: { color: "rgba(120,120,120,0.15)" }, ticks: { color: "#4b5563", maxRotation: 45, minRotation: 45, autoSkip: true } },
       y: {
         min,
         max,
