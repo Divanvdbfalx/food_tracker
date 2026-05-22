@@ -32,6 +32,7 @@ export default function Page() {
   const [calMsg, setCalMsg] = useState("");
   const [activeMsg, setActiveMsg] = useState("");
   const [caloriePlan, setCaloriePlan] = useState(DEFAULT_CALORIE_PLAN);
+  const [showLast7Days, setShowLast7Days] = useState(false);
 
   const [weightForm, setWeightForm] = useState({ date: todayISO(), weight_kg: "73.0", notes: "" });
   const [calForm, setCalForm] = useState({ date: todayISO(), time: timeNow(), meal_tag: "breakfast", calories: "400", protein_g: "30", notes: "" });
@@ -131,14 +132,27 @@ export default function Page() {
           <div className="info">{model.guidance}</div>
           <div className="sp" />
           <h3>Progress Charts</h3>
+          <button
+            type="button"
+            className={`chart-toggle-btn ${showLast7Days ? "on" : ""}`}
+            onClick={() => setShowLast7Days((v) => !v)}
+            aria-pressed={showLast7Days}
+            title="Toggle last 7 days"
+          >
+            <span className="chart-toggle-switch" aria-hidden="true">
+              <span className="chart-toggle-knob" />
+            </span>
+            <span className="chart-toggle-label">Last 7 days</span>
+          </button>
+          <div className="sp" />
           <p className="muted">Daily bodyweight and 7-day average</p>
-          <WeightChart data={model.weightChart} />
+          <WeightChart data={filterLast7Days(model.weightChart, showLast7Days)} />
           <div className="sp" />
           <p className="muted">Daily calories vs target</p>
-          <CalorieChart data={model.calorieChart} />
+          <CalorieChart data={filterLast7Days(model.calorieChart, showLast7Days)} />
           <div className="sp" />
           <p className="muted">Daily protein</p>
-          <ProteinChart data={model.calorieChart} />
+          <ProteinChart data={filterLast7Days(model.calorieChart, showLast7Days)} />
           <div className="sp" />
           <p className="muted">Weekly target calories (from first bodyweight entry date)</p>
           <WeeklyTargetChart data={model.weeklyTargetChart} currentWeek={model.currentWeek} />
@@ -490,6 +504,14 @@ function getWeek(planStart, dateStr) {
 }
 
 const avg = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
+
+function filterLast7Days(data, enabled) {
+  if (!enabled) return data;
+  const start = new Date();
+  start.setDate(start.getDate() - 6);
+  const startISO = start.toISOString().slice(0, 10);
+  return data.filter((d) => d.date >= startISO);
+}
 
 function toCSV(rows) {
   if (!rows.length) return "";
