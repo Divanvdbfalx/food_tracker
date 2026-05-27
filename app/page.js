@@ -7,11 +7,19 @@ import { supabase } from "@/lib/supabase";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler);
 
-const MEAL_TAGS = ["breakfast", "lunch", "snack", "dinner", "other"];
+const MEAL_TAGS = ["breakfast", "lunch", "dinner", "snack"];
 const DEFAULT_CALORIE_PLAN = {1:2560,2:2623,3:2686,4:2749,5:2811,6:2874,7:2937,8:3000,9:3000,10:3000,11:3000,12:3000,13:3000,14:3000,15:3000,16:3000};
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const timeNow = () => new Date().toTimeString().slice(0, 5);
+const mealTagFromTime = (time) => {
+  const [h, m] = time.split(":").map(Number);
+  const minutes = h * 60 + m;
+  if (minutes < 9 * 60) return "breakfast";
+  if (minutes >= 11 * 60 && minutes <= 15 * 60) return "lunch";
+  if (minutes >= 18 * 60 && minutes <= 21 * 60) return "dinner";
+  return "snack";
+};
 const r2 = (n) => Number(Number(n).toFixed(2));
 const pretty = (n, comma = false) => {
   const v = Number(n);
@@ -35,7 +43,7 @@ export default function Page() {
   const [showLast7Days, setShowLast7Days] = useState(false);
 
   const [weightForm, setWeightForm] = useState({ date: todayISO(), weight_kg: "73.0", notes: "" });
-  const [calForm, setCalForm] = useState({ date: todayISO(), time: timeNow(), meal_tag: "breakfast", calories: "400", protein_g: "30", notes: "" });
+  const [calForm, setCalForm] = useState({ date: todayISO(), time: timeNow(), meal_tag: mealTagFromTime(timeNow()), calories: "400", protein_g: "30", notes: "" });
   const [activeForm, setActiveForm] = useState({ date: todayISO(), time: timeNow(), calories: "350", notes: "" });
 
   async function loadData() {
@@ -80,9 +88,11 @@ export default function Page() {
     setCalMsg("");
     if (!supabase) return setCalMsg("Supabase env vars are missing.");
     if (!calForm.date || !calForm.calories) return setCalMsg("Please enter date and calories.");
-    const { error } = await supabase.from("calorie_log").insert({ ...calForm, calories: Number(calForm.calories), protein_g: Number(calForm.protein_g || 0) });
+    const logTime = timeNow();
+    const { error } = await supabase.from("calorie_log").insert({ ...calForm, time: logTime, calories: Number(calForm.calories), protein_g: Number(calForm.protein_g || 0) });
     if (error) return setCalMsg(error.message);
-    setCalForm({ date: todayISO(), time: timeNow(), meal_tag: "breakfast", calories: "400", protein_g: "30", notes: "" });
+    const nextTime = timeNow();
+    setCalForm({ date: todayISO(), time: nextTime, meal_tag: mealTagFromTime(nextTime), calories: "400", protein_g: "30", notes: "" });
     setCalMsg("Calorie entry saved.");
     loadData();
   }
@@ -177,13 +187,29 @@ export default function Page() {
           <h3>Log Calories</h3>
           <form onSubmit={addCalories}>
             <div className="grid">
-              <input type="date" value={calForm.date} onChange={(e) => setCalForm({ ...calForm, date: e.target.value })} />
-              <input type="time" value={calForm.time} onChange={(e) => setCalForm({ ...calForm, time: e.target.value })} />
-              <select value={calForm.meal_tag} onChange={(e) => setCalForm({ ...calForm, meal_tag: e.target.value })}>{MEAL_TAGS.map((m) => <option key={m}>{m}</option>)}</select>
-              <input type="number" min="1" max="5000" step="1" placeholder="Calories" value={calForm.calories} onChange={(e) => setCalForm({ ...calForm, calories: e.target.value })} />
-              <input type="number" min="0" max="500" step="1" placeholder="Protein (g)" value={calForm.protein_g} onChange={(e) => setCalForm({ ...calForm, protein_g: e.target.value })} />
-              <textarea placeholder="Notes" value={calForm.notes} onChange={(e) => setCalForm({ ...calForm, notes: e.target.value })} />
-              <div />
+              <input className="full-width" type="date" value={calForm.date} onChange={(e) => setCalForm({ ...calForm, date: e.target.value })} />
+              <div className="meal-tags" role="radiogroup" aria-label="Meal type">
+                {MEAL_TAGS.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    className={`meal-tag ${calForm.meal_tag === m ? "active" : ""}`}
+                    onClick={() => setCalForm({ ...calForm, meal_tag: m })}
+                    aria-pressed={calForm.meal_tag === m}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+              <label className="field-label">
+                Calories
+                <input type="number" min="1" max="5000" step="1" value={calForm.calories} onChange={(e) => setCalForm({ ...calForm, calories: e.target.value })} />
+              </label>
+              <label className="field-label">
+                Protein (g)
+                <input type="number" min="0" max="500" step="1" value={calForm.protein_g} onChange={(e) => setCalForm({ ...calForm, protein_g: e.target.value })} />
+              </label>
+              <textarea className="full-width" placeholder="Notes" value={calForm.notes} onChange={(e) => setCalForm({ ...calForm, notes: e.target.value })} />
             </div>
             <div className="sp" />
             <button type="submit">Add Calorie Entry</button>
