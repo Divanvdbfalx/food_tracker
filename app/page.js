@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Line } from "react-chartjs-2";
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler } from "chart.js";
 import { supabase } from "@/lib/supabase";
@@ -9,6 +9,8 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip,
 
 const MEAL_TAGS = ["breakfast", "lunch", "dinner", "snack"];
 const DEFAULT_CALORIE_PLAN = {1:2560,2:2623,3:2686,4:2749,5:2811,6:2874,7:2937,8:3000,9:3000,10:3000,11:3000,12:3000,13:3000,14:3000,15:3000,16:3000};
+const STREAK_KEY = "food-tracker-active-streak-v1";
+const SAVED_STREAKS_KEY = "food-tracker-saved-streaks-v1";
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const timeNow = () => new Date().toTimeString().slice(0, 5);
@@ -29,6 +31,7 @@ const pretty = (n, comma = false) => {
     : v.toFixed(2);
 };
 const num = (n, u = "") => (n == null || Number.isNaN(n) ? "-" : `${Number(n).toFixed(2)} ${u}`.trim());
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
 export default function Page() {
   const [tab, setTab] = useState("dashboard");
@@ -41,10 +44,20 @@ export default function Page() {
   const [activeMsg, setActiveMsg] = useState("");
   const [caloriePlan, setCaloriePlan] = useState(DEFAULT_CALORIE_PLAN);
   const [showLast7Days, setShowLast7Days] = useState(false);
+  const [savedStreaks, setSavedStreaks] = useState([]);
+  const [activeStreak, setActiveStreak] = useState(() => makeDefaultStreak());
+  const [streakForm, setStreakForm] = useState(() => makeDefaultStreak());
+  const [streakMsg, setStreakMsg] = useState("");
 
   const [weightForm, setWeightForm] = useState({ date: todayISO(), weight_kg: "73.0", notes: "" });
   const [calForm, setCalForm] = useState({ date: todayISO(), time: timeNow(), meal_tag: mealTagFromTime(timeNow()), calories: "400", protein_g: "30", notes: "" });
   const [activeForm, setActiveForm] = useState({ date: todayISO(), time: timeNow(), calories: "350", notes: "" });
+
+  const [photoPreview, setPhotoPreview] = useState(null);
+  const [foodDesc, setFoodDesc] = useState("");
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzeMsg, setAnalyzeMsg] = useState("");
+  const photoInputRef = useRef(null);
 
   async function loadData() {
     if (!supabase) return setMsg("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
@@ -58,7 +71,8 @@ export default function Page() {
     setWeight(w.data || []);
     setCalories(c.data || []);
     setActiveCalories(a.data || []);
-    if (t.data?.length) {
+    const hasStoredStreak = typeof window !== "undefined" && window.localStorage.getItem(STREAK_KEY);
+    if (t.data?.length && !hasStoredStreak) {
       const plan = t.data.reduce((acc, row) => {
         acc[row.week_number] = Number(row.target_calories);
         return acc;
@@ -69,7 +83,29 @@ export default function Page() {
 
   useEffect(() => { loadData(); }, []);
 
-  const model = useMemo(() => compute(weight, calories, activeCalories, caloriePlan), [weight, calories, activeCalories, caloriePlan]);
+  useEffect(() => {
+    const storedStreak = readStoredJSON(STREAK_KEY, null);
+    const storedSaved = readStoredJSON(SAVED_STREAKS_KEY, []);
+    if (storedStreak) {
+      const hydrated = normalizeStreak(storedStreak);
+      setActiveStreak(hydrated);
+      setStreakForm(hydrated);
+      setCaloriePlan(hydrated.caloriePlan);
+    }
+    if (Array.isArray(storedSaved)) setSavedStreaks(storedSaved);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(STREAK_KEY, JSON.stringify(activeStreak));
+  }, [activeStreak]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(SAVED_STREAKS_KEY, JSON.stringify(savedStreaks));
+  }, [savedStreaks]);
+
+  const model = useMemo(() => compute(weight, calories, activeCalories, caloriePlan, activeStreak), [weight, calories, activeCalories, caloriePlan, activeStreak]);
 
   async function addWeight(e) {
     e.preventDefault();
@@ -97,6 +133,45 @@ export default function Page() {
     loadData();
   }
 
+  function handlePhotoSelect(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => setPhotoPreview(ev.target.result);
+    reader.readAsDataURL(file);
+    setAnalyzeMsg("");
+    e.target.value = "";
+  }
+
+  async function analyzeFood() {
+    if (!photoPreview) return;
+    setAnalyzing(true);
+    setAnalyzeMsg("");
+    try {
+      const res = await fetch("/api/analyze-food", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageDataUrl: photoPreview, description: foodDesc }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setAnalyzeMsg(`Error: ${data.error}`);
+      } else {
+        setCalForm((prev) => ({
+          ...prev,
+          calories: String(data.calories || prev.calories),
+          protein_g: String(data.protein_g || prev.protein_g),
+          notes: data.description || prev.notes,
+        }));
+        setAnalyzeMsg("Estimated from photo — review and save.");
+      }
+    } catch {
+      setAnalyzeMsg("Failed to analyze photo. Try again.");
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
   async function addActiveCalories(e) {
     e.preventDefault();
     setActiveMsg("");
@@ -109,9 +184,45 @@ export default function Page() {
     loadData();
   }
 
+  function updateStreakField(field, value) {
+    setStreakMsg("");
+    setStreakForm((prev) => {
+      if (field !== "horizonWeeks") return { ...prev, [field]: value };
+      const horizonWeeks = clamp(Number(value || 1), 1, 52);
+      return { ...prev, horizonWeeks, caloriePlan: resizePlan(prev.caloriePlan, horizonWeeks) };
+    });
+  }
+
+  function updateStreakPlan(nextPlan) {
+    setStreakMsg("");
+    setStreakForm((prev) => ({ ...prev, caloriePlan: resizePlan(nextPlan, prev.horizonWeeks) }));
+  }
+
+  function applyStreakPlan() {
+    const next = normalizeStreak(streakForm);
+    if (!next.startDate || !next.startWeightKg || !next.endWeightKg) {
+      setStreakMsg("Please set a start date, start weight, and end weight.");
+      return;
+    }
+    setActiveStreak(next);
+    setCaloriePlan(next.caloriePlan);
+    setTab("dashboard");
+    setStreakMsg("New streak started from day one.");
+  }
+
+  function saveAndStartNewStreak() {
+    const archived = buildSavedStreak(activeStreak, model, weight, calories, activeCalories);
+    setSavedStreaks((prev) => [archived, ...prev].slice(0, 20));
+    const next = normalizeStreak(streakForm);
+    setActiveStreak(next);
+    setCaloriePlan(next.caloriePlan);
+    setTab("dashboard");
+    setStreakMsg("Previous streak saved. New streak started from day one.");
+  }
+
   return (
     <main>
-      <h1>16-Week Weight Gain Tracker</h1>
+      <h1>Weight Streak Tracker</h1>
       <p className="muted">Warm Journal Theme · Next.js + Supabase</p>
 
       <div className="tabs">
@@ -120,6 +231,7 @@ export default function Page() {
           ["body", "Bodyweight Entry"],
           ["calorie", "Calorie Entry"],
           ["active", "Active Calories Entry"],
+          ["streak", "Streak Planner"],
           ["data", "Data"],
         ].map(([k, label]) => <button key={k} className={`tab ${tab === k ? "active" : ""}`} onClick={() => setTab(k)}>{label}</button>)}
       </div>
@@ -128,7 +240,13 @@ export default function Page() {
         {msg && <p className="muted">{msg}</p>}
 
         <section className={`panel ${tab === "dashboard" ? "active" : ""}`}>
-          <h3>{`Progress Snapshot - Week ${model.currentWeek}`}</h3>
+          <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+            <div>
+              <h3 style={{ margin: 0 }}>{`Progress Snapshot - Week ${model.currentWeek}`}</h3>
+              <p className="muted compact">{`Active streak: ${activeStreak.startDate} to ${model.targetEndDate} · ${pretty(activeStreak.startWeightKg)} kg to ${pretty(activeStreak.endWeightKg)} kg`}</p>
+            </div>
+            <button type="button" className="secondary-btn" onClick={() => setTab("streak")}>Plan Streak</button>
+          </div>
           <div className="grid-4">
             <Metric l="Today&apos;s Target" v={`${model.todayTarget} kcal`} />
             <Metric l="Today&apos;s Calories" v={num(model.todayCalories, "kcal")} />
@@ -164,7 +282,7 @@ export default function Page() {
           <p className="muted">Daily protein</p>
           <ProteinChart data={filterLast7Days(model.calorieChart, showLast7Days)} />
           <div className="sp" />
-          <p className="muted">Weekly target calories (from first bodyweight entry date)</p>
+          <p className="muted">Weekly target calories for the active streak</p>
           <WeeklyTargetChart data={model.weeklyTargetChart} currentWeek={model.currentWeek} />
         </section>
 
@@ -186,6 +304,28 @@ export default function Page() {
         <section className={`panel ${tab === "calorie" ? "active" : ""}`}>
           <h3>Log Calories</h3>
           <form onSubmit={addCalories}>
+            <div className="photo-section">
+              <input ref={photoInputRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={handlePhotoSelect} />
+              <button type="button" className="secondary-btn photo-pick-btn" onClick={() => photoInputRef.current?.click()}>
+                Take / choose photo
+              </button>
+              {photoPreview && (
+                <div className="photo-preview-row">
+                  <img src={photoPreview} alt="Food" className="food-thumb" />
+                  <div className="photo-desc-col">
+                    <label className="field-label">
+                      Description (optional)
+                      <input type="text" placeholder="e.g. chicken rice bowl" value={foodDesc} onChange={(e) => setFoodDesc(e.target.value)} />
+                    </label>
+                    <button type="button" className="analyze-btn" onClick={analyzeFood} disabled={analyzing}>
+                      {analyzing ? "Analyzing…" : "Estimate macros"}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {analyzeMsg && <p className="muted analyze-msg">{analyzeMsg}</p>}
+            </div>
+            <div className="sp" />
             <div className="grid">
               <input className="full-width" type="date" value={calForm.date} onChange={(e) => setCalForm({ ...calForm, date: e.target.value })} />
               <div className="meal-tags" role="radiogroup" aria-label="Meal type">
@@ -231,6 +371,66 @@ export default function Page() {
             <button type="submit">Add Active Calorie Entry</button>
             <p className="muted">{activeMsg}</p>
           </form>
+        </section>
+
+        <section className={`panel ${tab === "streak" ? "active" : ""}`}>
+          <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+            <div>
+              <h3 style={{ margin: 0 }}>Streak Planner</h3>
+              <p className="muted compact">Save the current streak, choose a fresh start, then drag the calorie target line.</p>
+            </div>
+            <span className="pill">{`Day ${model.streakDay}`}</span>
+          </div>
+          <div className="grid">
+            <label className="field-label">
+              Start date
+              <input type="date" value={streakForm.startDate} onChange={(e) => updateStreakField("startDate", e.target.value)} />
+            </label>
+            <label className="field-label">
+              Horizon (weeks)
+              <input type="number" min="1" max="52" step="1" value={streakForm.horizonWeeks} onChange={(e) => updateStreakField("horizonWeeks", e.target.value)} />
+            </label>
+            <label className="field-label">
+              Start weight (kg)
+              <input type="number" min="30" max="250" step="0.1" value={streakForm.startWeightKg} onChange={(e) => updateStreakField("startWeightKg", e.target.value)} />
+            </label>
+            <label className="field-label">
+              End weight (kg)
+              <input type="number" min="30" max="250" step="0.1" value={streakForm.endWeightKg} onChange={(e) => updateStreakField("endWeightKg", e.target.value)} />
+            </label>
+          </div>
+          <div className="sp" />
+          <div className="planner-summary">
+            <Metric l="Target End Date" v={addDays(streakForm.startDate, Number(streakForm.horizonWeeks || 1) * 7 - 1)} />
+            <Metric l="Weight Goal" v={`${pretty(Number(streakForm.endWeightKg || 0) - Number(streakForm.startWeightKg || 0))} kg`} />
+            <Metric l="Weeks Planned" v={String(streakForm.horizonWeeks || 1)} />
+          </div>
+          <div className="sp" />
+          <p className="muted">Drag the orange points up or down to shape weekly calorie targets.</p>
+          <EditableWeeklyTargetChart
+            startDate={streakForm.startDate}
+            horizonWeeks={Number(streakForm.horizonWeeks || 1)}
+            caloriePlan={streakForm.caloriePlan}
+            onChange={updateStreakPlan}
+          />
+          <div className="sp" />
+          <div className="row">
+            <button type="button" onClick={applyStreakPlan}>Start New Streak</button>
+            <button type="button" className="secondary-btn" onClick={saveAndStartNewStreak}>Save Current Streak & Start New</button>
+          </div>
+          <p className="muted">{streakMsg}</p>
+          <div className="sp" />
+          <h4>Saved Streaks</h4>
+          {savedStreaks.length ? (
+            <div className="saved-streaks">
+              {savedStreaks.map((s) => (
+                <div className="saved-streak" key={s.id}>
+                  <strong>{`${s.startDate} to ${s.endDate}`}</strong>
+                  <span>{`${s.startWeightKg} kg to ${s.latestWeightKg ?? "-"} kg · ${s.daysLogged} logged days`}</span>
+                </div>
+              ))}
+            </div>
+          ) : <p className="muted">No saved streaks yet.</p>}
         </section>
 
         <section className={`panel ${tab === "data" ? "active" : ""}`}>
@@ -422,6 +622,78 @@ function WeeklyTargetChart({ data, currentWeek }) {
   );
 }
 
+function EditableWeeklyTargetChart({ startDate, horizonWeeks, caloriePlan, onChange }) {
+  const chartRef = useRef(null);
+  const dragIndexRef = useRef(null);
+  const weeks = Math.max(1, Number(horizonWeeks || 1));
+  const data = Array.from({ length: weeks }, (_, i) => {
+    const week = i + 1;
+    return {
+      week,
+      date: addDays(startDate, i * 7),
+      target_calories: Number(caloriePlan[week] ?? 3000),
+    };
+  });
+  const target = data.map((d) => d.target_calories);
+  const min = Math.max(0, Math.min(...target) - 250);
+  const max = Math.max(...target) + 250;
+
+  function updatePoint(event) {
+    const chart = chartRef.current;
+    const index = dragIndexRef.current;
+    if (!chart || index == null) return;
+    const rect = chart.canvas.getBoundingClientRect();
+    const y = event.clientY - rect.top;
+    const value = Math.round(chart.scales.y.getValueForPixel(y) / 25) * 25;
+    const next = { ...caloriePlan, [index + 1]: clamp(value, 1000, 6000) };
+    onChange(next);
+  }
+
+  return (
+    <div
+      className="editable-chart"
+      onPointerDown={(event) => {
+        const chart = chartRef.current;
+        if (!chart) return;
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+        const rect = chart.canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const rawIndex = chart.scales.x.getValueForPixel(x);
+        dragIndexRef.current = clamp(Math.round(Number(rawIndex)), 0, weeks - 1);
+        updatePoint(event);
+      }}
+      onPointerMove={updatePoint}
+      onPointerUp={() => { dragIndexRef.current = null; }}
+      onPointerLeave={() => { dragIndexRef.current = null; }}
+    >
+      <Line
+        ref={chartRef}
+        data={{
+          labels: data.map((d) => `W${d.week} (${d.date})`),
+          datasets: [
+            {
+              label: "Planned calories",
+              data: target,
+              borderColor: "#b25f1b",
+              backgroundColor: "rgba(178,95,27,0.12)",
+              pointRadius: 7,
+              pointHoverRadius: 8,
+              tension: 0.2,
+              fill: true,
+            },
+          ],
+        }}
+        options={{
+          ...baseChartOptions({ min, max, comma: true }),
+          onHover: (event, elements) => {
+            if (chartRef.current?.canvas) chartRef.current.canvas.style.cursor = elements.length ? "grab" : "crosshair";
+          },
+        }}
+      />
+    </div>
+  );
+}
+
 function baseChartOptions({ min, max, comma = false }) {
   return {
     responsive: true,
@@ -456,13 +728,76 @@ function Table({ rows, cols }) {
   return <table><thead><tr>{cols.map((c) => <th key={c}>{c}</th>)}</tr></thead><tbody>{rows.map((r, i) => <tr key={i}>{cols.map((c) => <td key={c}>{r[c] ?? ""}</td>)}</tr>)}</tbody></table>;
 }
 
-function compute(weightRows, calorieRows, activeRows, caloriePlan) {
-  const ws = [...weightRows].sort((a, b) => a.date.localeCompare(b.date));
-  const cs = [...calorieRows].sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`));
-  const as = [...activeRows].sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`));
-  const planStart = ws[0]?.date || cs[0]?.date || as[0]?.date || todayISO();
+function makeDefaultStreak() {
+  return normalizeStreak({
+    startDate: todayISO(),
+    startWeightKg: "73.0",
+    endWeightKg: "78.0",
+    horizonWeeks: 16,
+    caloriePlan: DEFAULT_CALORIE_PLAN,
+  });
+}
+
+function normalizeStreak(streak = {}) {
+  const horizonWeeks = clamp(Number(streak.horizonWeeks || 16), 1, 52);
+  const startDate = streak.startDate || todayISO();
+  return {
+    startDate,
+    startWeightKg: String(streak.startWeightKg ?? "73.0"),
+    endWeightKg: String(streak.endWeightKg ?? "78.0"),
+    horizonWeeks,
+    caloriePlan: resizePlan(streak.caloriePlan || DEFAULT_CALORIE_PLAN, horizonWeeks),
+  };
+}
+
+function resizePlan(plan, weeks) {
+  const next = {};
+  const safeWeeks = clamp(Number(weeks || 1), 1, 52);
+  for (let i = 1; i <= safeWeeks; i += 1) {
+    next[i] = Number(plan?.[i] ?? plan?.[String(i)] ?? DEFAULT_CALORIE_PLAN[Math.min(i, 16)] ?? next[i - 1] ?? 3000);
+  }
+  return next;
+}
+
+function buildSavedStreak(activeStreak, model, weightRows, calorieRows, activeRows) {
+  const streak = normalizeStreak(activeStreak);
+  const endDate = todayISO();
+  const weightInStreak = weightRows.filter((r) => r.date >= streak.startDate && r.date <= endDate);
+  const calorieDates = new Set(calorieRows.filter((r) => r.date >= streak.startDate && r.date <= endDate).map((r) => r.date));
+  const activeDates = new Set(activeRows.filter((r) => r.date >= streak.startDate && r.date <= endDate).map((r) => r.date));
+  return {
+    id: `${Date.now()}`,
+    savedAt: new Date().toISOString(),
+    startDate: streak.startDate,
+    endDate,
+    startWeightKg: streak.startWeightKg,
+    plannedEndWeightKg: streak.endWeightKg,
+    latestWeightKg: model.latestWeight == null ? null : r2(model.latestWeight),
+    daysLogged: new Set([...calorieDates, ...activeDates, ...weightInStreak.map((r) => r.date)]).size,
+    horizonWeeks: streak.horizonWeeks,
+    caloriePlan: streak.caloriePlan,
+  };
+}
+
+function readStoredJSON(key, fallback) {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function compute(weightRows, calorieRows, activeRows, caloriePlan, activeStreak) {
+  const normalizedStreak = normalizeStreak(activeStreak);
+  const planStart = normalizedStreak.startDate;
+  const horizonWeeks = normalizedStreak.horizonWeeks;
+  const ws = [...weightRows].filter((r) => r.date >= planStart).sort((a, b) => a.date.localeCompare(b.date));
+  const cs = [...calorieRows].filter((r) => r.date >= planStart).sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`));
+  const as = [...activeRows].filter((r) => r.date >= planStart).sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`));
   const week = getWeek(planStart, todayISO());
-  const baseTarget = caloriePlan[week] ?? DEFAULT_CALORIE_PLAN[week];
+  const baseTarget = caloriePlan[Math.min(week, horizonWeeks)] ?? DEFAULT_CALORIE_PLAN[Math.min(week, 16)] ?? 3000;
 
   const vals = ws.map((x) => Number(x.weight_kg));
   const latestWeight = vals.length ? vals[vals.length - 1] : null;
@@ -497,7 +832,10 @@ function compute(weightRows, calorieRows, activeRows, caloriePlan) {
   }
 
   const weightChart = ws.map((w, i) => ({ ...w, weight_7d_avg: i >= 6 ? avg(vals.slice(i - 6, i + 1)) : null }));
-  const calorieChart = daily.map((d) => ({ ...d, target_calories: (caloriePlan[getWeek(planStart, d.date)] ?? DEFAULT_CALORIE_PLAN[getWeek(planStart, d.date)]) + (amap[d.date] ?? 0) }));
+  const calorieChart = daily.map((d) => {
+    const chartWeek = Math.min(getWeek(planStart, d.date), horizonWeeks);
+    return { ...d, target_calories: (caloriePlan[chartWeek] ?? DEFAULT_CALORIE_PLAN[Math.min(chartWeek, 16)] ?? 3000) + (amap[d.date] ?? 0) };
+  });
   const weeklyCalsByWeek = {};
   const today = todayISO();
   daily.forEach((d) => {
@@ -508,7 +846,7 @@ function compute(weightRows, calorieRows, activeRows, caloriePlan) {
     weeklyCalsByWeek[w].push(d.daily_calories);
   });
 
-  const weeklyTargetChart = Array.from({ length: 16 }, (_, i) => {
+  const weeklyTargetChart = Array.from({ length: horizonWeeks }, (_, i) => {
     const weekNum = i + 1;
     const d = new Date(planStart);
     d.setDate(d.getDate() + i * 7);
@@ -521,15 +859,24 @@ function compute(weightRows, calorieRows, activeRows, caloriePlan) {
     };
   });
 
-  return { currentWeek: week, todayTarget, todayCalories, todayProtein, todayActiveCalories, caloriesLeft, latestWeight, avg7, prev7, weeklyChange, avgCal, diff, guidance, weightChart, calorieChart, weeklyTargetChart };
+  const targetEndDate = addDays(planStart, horizonWeeks * 7 - 1);
+  const streakDay = Math.max(1, Math.floor((new Date(todayISO()) - new Date(planStart)) / 86400000) + 1);
+
+  return { currentWeek: week, todayTarget, todayCalories, todayProtein, todayActiveCalories, caloriesLeft, latestWeight, avg7, prev7, weeklyChange, avgCal, diff, guidance, weightChart, calorieChart, weeklyTargetChart, targetEndDate, streakDay };
 }
 
 function getWeek(planStart, dateStr) {
   const days = Math.floor((new Date(dateStr) - new Date(planStart)) / 86400000);
-  return Math.max(1, Math.min(16, Math.floor(days / 7) + 1));
+  return Math.max(1, Math.floor(days / 7) + 1);
 }
 
 const avg = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
+
+function addDays(dateStr, days) {
+  const d = new Date(dateStr || todayISO());
+  d.setDate(d.getDate() + Number(days || 0));
+  return d.toISOString().slice(0, 10);
+}
 
 function filterLast7Days(data, enabled) {
   if (!enabled) return data;
