@@ -38,7 +38,9 @@ Description: <max 20 characters>`;
   }
 
   const data = await orRes.json();
-  const raw = data.choices?.[0]?.message?.content ?? "";
+  const raw = (data.choices?.[0]?.message?.content ?? "")
+    .replace(/^user\s+safety\s*:\s*\S+\s*/im, "")
+    .trim();
 
   const calMatch = raw.match(/^Calories:\s*(\d+)/im);
   const proMatch = raw.match(/^Protein:\s*(\d+)/im);
@@ -48,5 +50,6 @@ Description: <max 20 characters>`;
     calories: calMatch ? Number(calMatch[1]) : 0,
     protein_g: proMatch ? Number(proMatch[1]) : 0,
     description: descMatch ? descMatch[1].trim().slice(0, 20) : "",
+    raw: raw.trim(),
   });
 }

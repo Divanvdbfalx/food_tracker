@@ -57,6 +57,8 @@ export default function Page() {
   const [foodDesc, setFoodDesc] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeMsg, setAnalyzeMsg] = useState("");
+  const [rawModelOutput, setRawModelOutput] = useState("");
+  const [showRawOutput, setShowRawOutput] = useState(false);
   const photoInputRef = useRef(null);
 
   async function loadData() {
@@ -163,6 +165,8 @@ export default function Page() {
           protein_g: data.protein_g != null && data.protein_g > 0 ? String(data.protein_g) : prev.protein_g,
           notes: data.description || prev.notes,
         }));
+        setRawModelOutput(data.raw || "");
+        setShowRawOutput(false);
         setAnalyzeMsg("Estimated from photo — review and save.");
       }
     } catch {
@@ -354,6 +358,14 @@ export default function Page() {
             <div className="sp" />
             <button type="submit">Add Calorie Entry</button>
             <p className="muted">{calMsg}</p>
+            {rawModelOutput && (
+              <>
+                <button type="button" className="secondary-btn" onClick={() => setShowRawOutput((v) => !v)}>
+                  {showRawOutput ? "Hide model output" : "Show model output"}
+                </button>
+                {showRawOutput && <pre className="raw-output">{rawModelOutput}</pre>}
+              </>
+            )}
           </form>
         </section>
 
