@@ -159,8 +159,8 @@ export default function Page() {
       } else {
         setCalForm((prev) => ({
           ...prev,
-          calories: String(data.calories || prev.calories),
-          protein_g: String(data.protein_g || prev.protein_g),
+          calories: data.calories != null && data.calories > 0 ? String(data.calories) : prev.calories,
+          protein_g: data.protein_g != null && data.protein_g > 0 ? String(data.protein_g) : prev.protein_g,
           notes: data.description || prev.notes,
         }));
         setAnalyzeMsg("Estimated from photo — review and save.");

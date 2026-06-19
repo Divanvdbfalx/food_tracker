@@ -7,7 +7,10 @@ export async function POST(request) {
   const { imageDataUrl, description } = await request.json();
   if (!imageDataUrl) return Response.json({ error: "No image provided" }, { status: 400 });
 
-  const promptText = `${description ? description + ". " : ""}And estimate the macros. List only Short Description, Protein, Calories. Return ONLY compact JSON: {"description": "string", "protein_g": number, "calories": number}`;
+  const promptText = `${description ? description + ". " : ""}Analyze this food image. Reply with ONLY these three lines, nothing else:
+Calories: <number>
+Protein: <number>
+Description: <max 20 characters>`;
 
   const orRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -37,21 +40,13 @@ export async function POST(request) {
   const data = await orRes.json();
   const raw = data.choices?.[0]?.message?.content ?? "";
 
-  const cleaned = raw.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
-  try {
-    const parsed = JSON.parse(cleaned);
-    return Response.json({
-      description: parsed.description ?? "",
-      protein_g: Number(parsed.protein_g ?? 0),
-      calories: Number(parsed.calories ?? 0),
-    });
-  } catch {
-    const calMatch = raw.match(/calories[:\s]*(\d+)/i);
-    const proMatch = raw.match(/protein[:\s]*(\d+)/i);
-    return Response.json({
-      description: raw.slice(0, 200),
-      protein_g: proMatch ? Number(proMatch[1]) : 0,
-      calories: calMatch ? Number(calMatch[1]) : 0,
-    });
-  }
+  const calMatch = raw.match(/^Calories:\s*(\d+)/im);
+  const proMatch = raw.match(/^Protein:\s*(\d+)/im);
+  const descMatch = raw.match(/^Description:\s*(.+)/im);
+
+  return Response.json({
+    calories: calMatch ? Number(calMatch[1]) : 0,
+    protein_g: proMatch ? Number(proMatch[1]) : 0,
+    description: descMatch ? descMatch[1].trim().slice(0, 20) : "",
+  });
 }
